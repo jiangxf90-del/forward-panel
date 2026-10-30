@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>转发规则面板</title>
+<style>
+  :root{
+    --bg:#101216; --panel:#171a20; --panel2:#1d212a; --line:#262b36;
+    --text:#e6e8ec; --muted:#9aa3b2; --accent:#3b82f6; --accent2:#2563eb;
+    --green:#22c55e; --red:#ef4444; --orange:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+    font-size:14px}
+  a{color:var(--accent)}
+  button{cursor:pointer;border:1px solid var(--line);background:var(--panel2);
+    color:var(--text);border-radius:8px;padding:7px 14px;font-size:14px}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.primary:hover{background:var(--accent2)}
+  button.danger:hover{border-color:var(--red);color:var(--red)}
+  input,select{width:100%;background:#0d0f13;color:var(--text);
+    border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:14px}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  /* layout */
+  .wrap{display:flex;min-height:100vh}
+  .side{width:190px;background:#14171d;border-right:1px solid var(--line);
+    padding:18px 12px;flex-shrink:0}
+  .side h1{font-size:16px;margin:0 0 18px 8px}
+  .side h1 span{display:block;font-size:11px;color:var(--muted);margin-top:4px;font-weight:400}
+  .nav{list-style:none;margin:0;padding:0}
+  .nav li{padding:10px 12px;border-radius:8px;color:var(--muted);cursor:pointer}
+  .nav li.active{background:#1e293b;color:#fff}
+  .main{flex:1;padding:22px 26px;min-width:0}
+  .topbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+  .topbar h2{margin:0;font-size:20px;flex:1}
+  .topbar input{width:220px}
+  /* stats + tabs */
+  .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 16px}
+  .stat b{font-size:15px}
+  .stat span{color:var(--muted);font-size:12px;display:block;margin-top:2px}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .tab{padding:7px 14px;border-radius:20px;border:1px solid var(--line);
+    background:var(--panel);color:var(--muted);cursor:pointer}
+  .tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  /* table */
+  table{width:100%;border-collapse:collapse;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--line);
+    vertical-align:middle}
+  th{color:var(--muted);font-weight:500;font-size:13px;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;
+    word-break:break-all}
+  .ok{color:var(--green)} .paused{color:var(--orange)}
+  .rowbtns{display:flex;gap:6px;flex-wrap:wrap}
+  .rowbtns button{padding:5px 10px;font-size:13px}
+  .empty{padding:40px;text-align:center;color:var(--muted)}
+  /* modal */
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;
+    align-items:flex-start;justify-content:center;padding-top:9vh;z-index:10}
+  .mask.show{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    width:min(520px,92vw);padding:22px}
+  .modal h3{margin:0 0 16px;font-size:17px}
+  .field{margin-bottom:14px}
+  .field label{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}
+  .hint{color:var(--muted);font-size:12px;margin-top:5px}
+  .modal .foot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+  .bigentry{font-family:ui-monospace,Menlo,monospace;font-size:26px;font-weight:700;
+    text-align:center;padding:18px 8px;background:#0d0f13;border:1px solid var(--line);
+    border-radius:10px;word-break:break-all}
+  .steps{line-height:1.9;margin:14px 0 4px;padding-left:20px}
+  .steps b{color:#fff}
+  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);
+    background:#1f2937;border:1px solid var(--line);padding:10px 18px;
+    border-radius:10px;display:none;z-index:50}
+  .toast.show{display:block}
+  .err{color:var(--red);min-height:18px;font-size:13px}
+  /* login */
+  .loginwrap{min-height:100vh;display:flex;align-items:center;justify-content:center}
+  .login{width:min(360px,92vw);background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;padding:26px}
+  .login h2{margin:0 0 6px}
+  .login p{color:var(--muted);margin:0 0 18px;font-size:13px}
+  @media (max-width:760px){
+    .side{display:none}
+    .main{padding:16px}
+    table{font-size:13px}
+    th:nth-child(2),td:nth-child(2){display:none}
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= 登录 ================= -->
+<div id="loginView" class="loginwrap" style="display:none">
+  <div class="login">
+    <h2>转发规则面板</h2>
+    <p>安装在本台中转机上，登录后管理转发规则。</p>
+    <div class="field">
+      <label>管理员密码</label>
+      <input id="loginPass" type="password" placeholder="安装时设置的密码" autocomplete="current-password">
+    </div>
+    <div class="err" id="loginErr"></div>
+    <button class="primary" id="loginBtn" style="width:100%;padding:10px">登录</button>
+  </div>
+</div>
+
+<!-- ================= 面板 ================= -->
+<div id="panelView" class="wrap" style="display:none">
+  <aside class="side">
+    <h1>转发规则面板<span>装在本台中转机上</span></h1>
+    <ul class="nav">
+      <li>主页</li>
+      <li class="active">转发规则</li>
+      <li id="navStats">统计数据</li>
+      <li id="navLogout">退出登录</li>
+    </ul>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <h2>我的转发规则</h2>
+      <input id="searchBox" placeholder="搜索规则">
+      <button id="refreshBtn">刷新</button>
+      <button id="statsBtn">统计数据</button>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><b id="statTraffic">0 B</b><span>已用流量（全部规则）</span></div>
+      <div class="stat"><b id="statRules">0 / 999</b><span>规则数</span></div>
+      <div class="stat"><b id="statRunning">0 条转发中</b><span>启用中的规则</span></div>
+    </div>
+
+    <div class="tabs" id="groupTabs"></div>
+
+    <div class="actions">
+      <button class="primary" id="addBtn">添加规则</button>
+      <button id="batchDelBtn" class="danger">删除选中</button>
+    </div>
+
+    <table>
+      <thead><tr>
+        <th><input type="checkbox" id="checkAll"></th>
+        <th>规则名</th><th>分组</th><th>入口</th><th>出口</th>
+        <th>已用流量</th><th>状态</th><th>操作</th>
+      </tr></thead>
+      <tbody id="ruleRows"></tbody>
+    </table>
+    <div id="emptyHint" class="empty" style="display:none">
+      还没有规则。点“添加规则”，把落地节点的 SOCKS5 地址和端口填为目标地址即可。
+    </div>
+  </main>
+</div>
+
+<!-- ================= 添加规则 ================= -->
+<div class="mask" id="addMask">
+  <div class="modal">
+    <h3>添加规则</h3>
+    <div class="field">
+      <label>名称</label>
+      <input id="fName" placeholder="例如：直播手机01">
+    </div>
+    <div class="field">
+      <label>分组</label>
+      <input id="fGroup" placeholder="例如：直播分组（留空为未分组）">
+    </div>
+    <div class="field">
+      <label>监听端口</label>
+      <input id="fPort" placeholder="留空则随机（10000-65535）" inputmode="numeric">
+      <div class="hint">这是本台中转机上监听的端口，生成后会连同中转机地址一起作为入口地址。</div>
+    </div>
+    <div class="field">
+      <label>目标地址</label>
+      <input id="fTarget" placeholder="落地节点 SOCKS5 地址:端口，例如 203.0.113.10:1080">
+      <div class="hint">一行一个目标？本面板 v1 每条规则只填一个目标：落地节点的 SOCKS5 地址和端口。</div>
+    </div>
+    <div class="err" id="addErr"></div>
+    <div class="foot">
+      <button id="addCancel">取消</button>
+      <button class="primary" id="addOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 添加成功：入口地址 ================= -->
+<div class="mask" id="doneMask">
+  <div class="modal">
+    <h3>规则已创建，入口地址如下</h3>
+    <div class="bigentry" id="doneEntry"></div>
+    <ol class="steps">
+      <li>复制上面的入口地址，粘贴到手机节点配置里，<b>替换原来的落地地址</b>；</li>
+      <li>SOCKS5 账号密码<b>不用改</b>，保持原来落地节点的账号密码；</li>
+      <li>保存节点后，手机先连中转机，中转机再转发到落地节点出网。</li>
+    </ol>
+    <div class="foot">
+      <button class="primary" id="doneCopy">复制入口地址</button>
+      <button id="doneClose">完成</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 统计 ================= -->
+<div class="mask" id="statsMask">
+  <div class="modal">
+    <h3>流量统计</h3>
+    <div id="statsBody"></div>
+    <div class="foot"><button id="statsClose">关闭</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* 转发规则面板前端：纯原生 JS，无构建步骤。
+   所有数据操作都走 /api/*；未登录时后端返回 401，前端切回登录页。 */
+const $ = id => document.getElementById(id);
+let rules = [];          // 后端返回的规则（含 entry、流量）
+let activeGroup = '全部';
+let toastTimer = null;
+
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>t.classList.remove('show'), 3200);
+}
+
+async function api(method, path, body){
+  const res = await fetch(path, {
+    method,
+    headers: {'Content-Type': 'application/json'},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data = {};
+  try { data = await res.json(); } catch(e) {}
+  if (res.status === 401) { showLogin(); throw new Error('login required'); }
+  if (!res.ok) throw new Error(data.error || ('请求失败 ' + res.status));
+  return data;
+}
+
+/* 流量格式化：B / KiB / MiB / GiB */
+function fmt(n){
+  const u = ['B','KiB','MiB','GiB','TiB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(2)) + ' ' + u[i];
+}
+
+/* 复制：优先系统剪贴板，失败时用临时输入框兜底 */
+async function copyText(text){
+  try { await navigator.clipboard.writeText(text); return true; }
+  catch(e){
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch(e2) {}
+    ta.remove(); return ok;
+  }
+}
+
+/* ---------------- 视图切换 ---------------- */
+function showLogin(){
+  $('loginView').style.display = 'flex';
+  $('panelView').style.display = 'none';
+}
+function showPanel(){
+  $('loginView').style.display = 'none';
+  $('panelView').style.display = 'flex';
+}
+
+async function boot(){
+  try {
+    const me = await api('GET', '/api/me');
+    if (me.logged_in) { showPanel(); await loadRules(); }
+    else showLogin();
+  } catch(e) { showLogin(); }
+}
+
+async function doLogin(){
+  $('loginErr').textContent = '';
+  const pass = $('loginPass').value;
+  if (!pass) { $('loginErr').textContent = '请输入管理员密码'; return; }
+  try {
+    await api('POST', '/api/login', {password: pass});
+    $('loginPass').value = '';
+    showPanel(); await loadRules();
+  } catch(e) {
+    $('loginErr').textContent = '密码不对，请重试';
+  }
+}
+
+/* ---------------- 规则列表 ---------------- */
+function visibleRules(){
+  const q = $('searchBox').value.trim().toLowerCase();
+  return rules.filter(r => {
+    if (activeGroup !== '全部' && r.group !== activeGroup) return false;
+    if (q && !(r.name.toLowerCase().includes(q) ||
+               r.target.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+function renderTabs(){
+  const groups = ['全部', ...new Set(rules.map(r => r.group))];
+  if (!groups.includes(activeGroup)) activeGroup = '全部';
+  $('groupTabs').innerHTML = groups.map(g =>
+    `<span class="tab${g === activeGroup ? ' active' : ''}" data-g="${g}">${g}</span>`
+  ).join('');
+  document.querySelectorAll('#groupTabs .tab').forEach(el => {
+    el.onclick = () => { activeGroup = el.dataset.g; renderAll(); };
+  });
+}
+
+function renderStats(){
+  const total = rules.reduce((s, r) => s + r.bytes_in + r.bytes_out, 0);
+  const running = rules.filter(r => r.enabled).length;
+  $('statTraffic').textContent = fmt(total);
+  $('statRules').textContent = rules.length + ' / 999';
+  $('statRunning').textContent = running + ' 条转发中';
+}
+
+function renderRows(){
+  const list = visibleRules();
+  const tbody = $('ruleRows');
+  if (!list.length) {
+    tbody.innerHTML = '';
+    $('emptyHint').style.display = rules.length ? 'none' : 'block';
+    return;
+  }
+  $('emptyHint').style.display = 'none';
+  tbody.innerHTML = list.map(r => `
+    <tr data-id="${r.id}">
+      <td><input type="checkbox" class="rowcheck" data-id="${r.id}"></td>
+      <td>${esc(r.name)}</td>
+      <td>${esc(r.group)}</td>
+      <td class="mono">${esc(r.entry)}</td>
+      <td class="mono">${esc(r.target)}</td>
+      <td class="mono" data-traffic="${r.id}">${fmt(r.bytes_in + r.bytes_out)}</td>
+      <td class="${r.enabled ? 'ok' : 'paused'}">${r.enabled ? '正常' : '已暂停'}</td>
+      <td><div class="rowbtns">
+        <button data-act="copy" data-id="${r.id}">复制入口地址</button>
+        <button data-act="toggle" data-id="${r.id}">${r.enabled ? '暂停' : '启用'}</button>
+        <button data-act="del" data-id="${r.id}" class="danger">删除</button>
+      </div></td>
+    </tr>`).join('');
+  tbody.querySelectorAll('button[data-act]').forEach(btn => {
+    btn.onclick = () => rowAction(btn.dataset.act, btn.dataset.id);
+  });
+}
+
+function renderAll(){ renderTabs(); renderStats(); renderRows(); }
+
+function esc(s){
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadRules(){
+  const data = await api('GET', '/api/rules');
+  rules = data.rules || [];
+  renderAll();
+}
+
+/* 只刷新流量格和统计，不重绘整表（避免打断勾选） */
+async function refreshTraffic(){
+  try {
+    const data = await api('GET', '/api/rules');
+    rules = data.rules || [];
+    renderStats();
+    rules.forEach(r => {
+      const cell = document.querySelector(`[data-traffic="${r.id}"]`);
+      if (cell) cell.textContent = fmt(r.bytes_in + r.bytes_out);
+    });
+  } catch(e) { /* 掉线时静默，等下次刷新 */ }
+}
+
+async function rowAction(act, id){
+  const rule = rules.find(r => r.id === id);
+  if (!rule) return;
+  try {
+    if (act === 'copy') {
+      if (await copyText(rule.entry)) toast('入口地址已复制，去手机节点配置里替换原落地地址');
+      else toast('复制失败，请手动复制：' + rule.entry);
+    } else if (act === 'toggle') {
+      await api('PATCH', '/api/rules/' + id, {enabled: !rule.enabled});
+      await loadRules();
+      toast(rule.enabled ? '已暂停转发' : '已恢复转发');
+    } else if (act === 'del') {
+      if (!confirm('删除规则「' + rule.name + '」？转发会立即停止。')) return;
+      await api('DELETE', '/api/rules/' + id);
+      await loadRules(); toast('已删除');
+    }
+  } catch(e) { toast('操作失败：' + e.message); }
+}
+
+/* ---------------- 添加规则 ---------------- */
+function openAdd(){ $('addErr').textContent = ''; $('addMask').classList.add('show'); }
+function closeAdd(){ $('addMask').classList.remove('show'); }
+
+async function submitAdd(){
+  $('addErr').textContent = '';
+  const name = $('fName').value.trim();
+  const group = $('fGroup').value.trim();
+  const portRaw = $('fPort').value.trim();
+  const target = $('fTarget').value.trim();
+  if (!name) { $('addErr').textContent = '请填写规则名称'; return; }
+  if (!target) { $('addErr').textContent = '请填写目标地址（落地节点 SOCKS5 地址:端口）'; return; }
+  let listen_port = null;
+  if (portRaw) {
+    listen_port = parseInt(portRaw, 10);
+    if (!Number.isInteger(listen_port) || listen_port < 1 || listen_port > 65535) {
+      $('addErr').textContent = '监听端口须为 1-65535 的数字，留空则随机'; return;
+    }
+  }
+  try {
+    const data = await api('POST', '/api/rules',
+      {name, group, listen_port, target});
+    closeAdd();
+    $('fName').value = ''; $('fGroup').value = '';
+    $('fPort').value = ''; $('fTarget').value = '';
+    $('doneEntry').textContent = data.entry;
+    $('doneMask').classList.add('show');
+    await loadRules();
+  } catch(e) { $('addErr').textContent = e.message; }
+}
+
+/* ---------------- 统计弹窗 ---------------- */
+function openStats(){
+  const total = rules.reduce((s, r) => s + r.bytes_in + r.bytes_out, 0);
+  const max = Math.max(1, ...rules.map(r => r.bytes_in + r.bytes_out));
+  $('statsBody').innerHTML =
+    `<p style="color:var(--muted)">全部规则合计：<b style="color:#fff">${fmt(total)}</b></p>` +
+    (rules.map(r => {
+      const t = r.bytes_in + r.bytes_out;
+      const pct = Math.round(t / max * 100);
+      return `<div style="margin:10px 0">
+        <div style="display:flex;justify-content:space-between">
+          <span>${esc(r.name)} <span style="color:var(--muted)">(${esc(r.group)})</span></span>
+          <span class="mono">${fmt(t)}</span>
+        </div>
+        <div style="height:8px;background:#0d0f13;border-radius:4px;margin-top:4px">
+          <div style="height:8px;width:${pct}%;background:var(--accent);border-radius:4px"></div>
+        </div>
+        <div style="color:var(--muted);font-size:12px;margin-top:2px">
+          上行 ${fmt(r.bytes_in)} · 下行 ${fmt(r.bytes_out)} · ${r.enabled ? '转发中' : '已暂停'}
+        </div>
+      </div>`;
+    }).join('') || '<p style="color:var(--muted)">暂无规则</p>');
+  $('statsMask').classList.add('show');
+}
+
+/* ---------------- 事件绑定 ---------------- */
+$('loginBtn').onclick = doLogin;
+$('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+$('refreshBtn').onclick = loadRules;
+$('statsBtn').onclick = openStats;
+$('navStats').onclick = openStats;
+$('statsClose').onclick = () => $('statsMask').classList.remove('show');
+$('navLogout').onclick = async () => {
+  try { await api('POST', '/api/logout'); } catch(e) {}
+  showLogin();
+};
+$('addBtn').onclick = openAdd;
+$('addCancel').onclick = closeAdd;
+$('addOk').onclick = submitAdd;
+$('doneClose').onclick = () => $('doneMask').classList.remove('show');
+$('doneCopy').onclick = async () => {
+  const entry = $('doneEntry').textContent;
+  if (await copyText(entry)) {
+    $('doneMask').classList.remove('show');
+    toast('入口地址已复制，去手机节点配置里替换原落地地址');
+  } else toast('复制失败，请手动复制：' + entry);
+};
+$('searchBox').addEventListener('input', renderAll);
+$('checkAll').onchange = e => {
+  document.querySelectorAll('.rowcheck').forEach(c => c.checked = e.target.checked);
+};
+$('batchDelBtn').onclick = async () => {
+  const ids = [...document.querySelectorAll('.rowcheck:checked')].map(c => c.dataset.id);
+  if (!ids.length) { toast('请先勾选要删除的规则'); return; }
+  if (!confirm('删除选中的 ' + ids.length + ' 条规则？转发会立即停止。')) return;
+  try {
+    await api('POST', '/api/rules/batch-delete', {ids});
+    await loadRules(); toast('已删除 ' + ids.length + ' 条规则');
+  } catch(e) { toast('删除失败：' + e.message); }
+};
+document.querySelectorAll('.mask').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('show'); });
+});
+
+/* 每 5 秒刷新一次流量（只更新数字，不重绘表格） */
+setInterval(() => {
+  if ($('panelView').style.display !== 'none') refreshTraffic();
+}, 5000);
+
+boot();
+</script>
+</body>
+</html>
