@@ -601,6 +601,17 @@ class RuleForwarder:
         # so re-enabling a rule re-locks it to the next device that connects.
         self.seen_ips = set()
         self.rate_limiter = _RateLimiter(rule.get("speed_limit_mbps", 0))
+        # SOCKS5 UDP ASSOCIATE info, keyed by client IP (one live phone
+        # normally has one ASSOCIATE at a time). Value:
+        # (relay_host, relay_port, tcp_local_port). The old code sent
+        # UDP datagrams to the SOCKS5 TCP port from a random UDP port,
+        # which a strict SOCKS5 server drops: UDP is only allowed to
+        # the relay address returned by ASSOCIATE, from the same
+        # IP:port as the TCP control connection. That is why simple
+        # TCP sites worked through the panel while Google/YouTube
+        # (QUIC over UDP) timed out, while xray (which does ASSOCIATE
+        # properly) worked on the same machine and landing.
+        self.udp_relay_by_ip = {}
 
     def effective_target(self):
         """Where this rule actually connects first.
@@ -750,10 +761,79 @@ class RuleForwarder:
         tune_socket(writer_socket(target_writer))
         pair = (client_writer, target_writer)
         self.tcp_conns.add(pair)
+        # Sniff the first packet in each direction for a SOCKS5 UDP
+        # ASSOCIATE exchange. The TCP pump itself stays raw: it does
+        # not parse or rewrite the SOCKS5 stream, it only learns the
+        # relay address/port from the ASSOCIATE reply so UDP can be
+        # sent to the right place from the right source port.
+        _assoc = {"is_associate": False}
+        _tcp_sock = writer_socket(target_writer)
+        try:
+            _tcp_local_port = _tcp_sock.getsockname()[1] if _tcp_sock else 0
+        except Exception:
+            _tcp_local_port = 0
+        _client_ip = peer[0] if peer and peer[0] else "unknown"
+
+        def _on_up_first(data):
+            if len(data) >= 10 and data[0] == 5 and data[1] == 3:
+                _assoc["is_associate"] = True
+
+        def _on_down_first(data):
+            if not _assoc["is_associate"]:
+                return None
+            if len(data) < 10 or data[0] != 5 or data[1] != 0:
+                return None
+            try:
+                atyp = data[3]
+                if atyp == 1 and len(data) >= 10:
+                    import socket as _s
+                    relay_host = _s.inet_ntoa(data[4:8])
+                    relay_port = int.from_bytes(data[8:10], "big")
+                elif atyp == 3 and len(data) >= 5:
+                    dlen = data[4]
+                    if len(data) < 5 + dlen + 2:
+                        return None
+                    relay_host = data[5:5 + dlen].decode("utf-8", "ignore")
+                    relay_port = int.from_bytes(data[5 + dlen:7 + dlen], "big")
+                elif atyp == 4 and len(data) >= 22:
+                    import socket as _s
+                    relay_host = _s.inet_ntop(_s.AF_INET6, data[4:20])
+                    relay_port = int.from_bytes(data[20:22], "big")
+                else:
+                    return None
+                if relay_host == "0.0.0.0" or relay_host == "::":
+                    relay_host = self.rule["target_host"]
+                self.udp_relay_by_ip[_client_ip] = (
+                    relay_host, relay_port, _tcp_local_port)
+                # Only rewrite once per connection; later application
+                # data must pass through untouched.
+                _assoc["is_associate"] = False
+                # Rewrite the reply so the client sends its UDP to
+                # THIS panel, not straight to the landing. Without
+                # this rewrite, a transparent forwarder breaks SOCKS5
+                # UDP: the client would bypass the relay for UDP
+                # entirely (phone -> landing direct), and QUIC/YouTube
+                # would fail or be slow even though TCP via the panel
+                # works. With the rewrite, UDP goes phone -> panel ->
+                # landing, via the relay address/port recorded above.
+                try:
+                    import socket as _s
+                    _panel_ip = self.panel.relay_ip
+                    _panel_ip_b = _s.inet_aton(_panel_ip)
+                    _entry_port = self.rule["listen_port"]
+                    return (b"\x05\x00\x00\x01" + _panel_ip_b +
+                            _entry_port.to_bytes(2, "big"))
+                except Exception:
+                    return None
+            except Exception:
+                return None
+
         pump_up = asyncio.ensure_future(
-            self._pump(client_reader, target_writer, "bytes_in"))
+            self._pump(client_reader, target_writer, "bytes_in",
+                       first_callback=_on_up_first))
         pump_down = asyncio.ensure_future(
-            self._pump(target_reader, client_writer, "bytes_out"))
+            self._pump(target_reader, client_writer, "bytes_out",
+                       first_callback=_on_down_first))
         self.tcp_tasks.add(pump_up)
         self.tcp_tasks.add(pump_down)
         try:
@@ -773,7 +853,7 @@ class RuleForwarder:
             self.tcp_tasks.discard(pump_up)
             self.tcp_tasks.discard(pump_down)
 
-    async def _pump(self, reader, writer, counter_key):
+    async def _pump(self, reader, writer, counter_key, first_callback=None):
         """Copy bytes one way, counting them. Ends on EOF or error."""
         try:
             while True:
@@ -782,6 +862,17 @@ class RuleForwarder:
                 data = await reader.read(262144)
                 if not data:
                     break
+                # SOCKS5 sniffing must run on every packet, not just
+                # the first: greeting and ASSOCIATE are separate TCP
+                # writes, so ASSOCIATE is the second up packet and its
+                # reply is the second down packet.
+                if first_callback is not None:
+                    try:
+                        _rewritten = first_callback(data)
+                        if isinstance(_rewritten, (bytes, bytearray)):
+                            data = bytes(_rewritten)
+                    except Exception:
+                        pass
                 await self.rate_limiter.consume(len(data))
                 writer.write(data)
                 await writer.drain()
@@ -820,10 +911,30 @@ class _UDPSession:
         if self.closed or self.transport is not None:
             return
         loop = asyncio.get_running_loop()
-        _t_host, _t_port = self.forwarder.effective_target()
-        transport, _ = await loop.create_datagram_endpoint(
-            lambda: _UDPUpstreamProtocol(self),
-            remote_addr=(_t_host, _t_port))
+        # SOCKS5 UDP: if this client has done a UDP ASSOCIATE, send
+        # to the relay address from that reply, from the same local
+        # port as the TCP control connection. Otherwise (plain UDP
+        # forwarding, or no ASSOCIATE yet) fall back to the old
+        # behaviour: straight to the target host:port.
+        _client_ip = self.client_addr[0]
+        _relay = self.forwarder.udp_relay_by_ip.get(_client_ip)
+        if _relay:
+            _t_host, _t_port, _tcp_port = _relay
+        else:
+            _t_host, _t_port = self.forwarder.effective_target()
+            _tcp_port = 0
+        try:
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _UDPUpstreamProtocol(self),
+                local_addr=("0.0.0.0", _tcp_port) if _tcp_port else None,
+                remote_addr=(_t_host, _t_port))
+        except Exception:
+            # Binding to the TCP port can fail if another UDP session
+            # from the same client IP already holds it; fall back to
+            # a random port rather than dropping the session entirely.
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _UDPUpstreamProtocol(self),
+                remote_addr=(_t_host, _t_port))
         if self.closed:
             transport.close()
             return
