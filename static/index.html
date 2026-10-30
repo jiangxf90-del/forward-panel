@@ -250,6 +250,7 @@
     </div>
     <div class="err" id="editErr"></div>
     <div class="foot">
+      <button id="editToggle">启动</button>
       <button id="editCancel">取消</button>
       <button class="primary" id="editOk">保存</button>
     </div>
@@ -414,7 +415,7 @@ function renderRows(){
       <td><div class="rowbtns">
         <button data-act="copy" data-id="${r.id}">复制入口地址</button>
         <button data-act="edit" data-id="${r.id}">编辑</button>
-        <button data-act="toggle" data-id="${r.id}">${r.enabled ? '暂停' : '启用'}</button>
+        <button data-act="toggle" data-id="${r.id}">${r.enabled ? '暂停' : '启动'}</button>
         <button data-act="del" data-id="${r.id}" class="danger">删除</button>
       </div></td>
     </tr>`).join('');
@@ -535,7 +536,22 @@ function openEdit(rule){
   $('eSpeed').value = rule.speed_limit_mbps || 0;
   $('eIpLimit').value = rule.ip_limit || 0;
   $('eConnLimit').value = rule.conn_limit || 0;
+  $('editToggle').textContent = rule.enabled ? '暂停' : '启动';
   $('editMask').classList.add('show');
+}
+async function toggleFromEdit(){
+  if (!editingId) return;
+  const rule = rules.find(r => r.id === editingId);
+  if (!rule) return;
+  try {
+    const data = await api('PATCH', '/api/rules/' + editingId, {enabled: !rule.enabled});
+    rule.enabled = data.rule.enabled;
+    $('editToggle').textContent = rule.enabled ? '暂停' : '启动';
+    await loadRules();
+    const fresh = rules.find(r => r.id === editingId);
+    if (fresh) $('editToggle').textContent = fresh.enabled ? '暂停' : '启动';
+    toast(rule.enabled ? '已启动' : '已暂停');
+  } catch(e) { $('editErr').textContent = e.message; }
 }
 function closeEdit(){ $('editMask').classList.remove('show'); editingId = null; }
 async function submitEdit(){
@@ -635,6 +651,7 @@ $('eExit').onchange = () => {
 };
 $('editCancel').onclick = closeEdit;
 $('editOk').onclick = submitEdit;
+$('editToggle').onclick = toggleFromEdit;
 $('addBtn').onclick = openAdd;
 $('addCancel').onclick = closeAdd;
 $('addOk').onclick = submitAdd;
