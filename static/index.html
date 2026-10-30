@@ -210,6 +210,52 @@
   </div>
 </div>
 
+<!-- ================= 编辑规则 ================= -->
+<div class="mask" id="editMask">
+  <div class="modal">
+    <h3>编辑规则</h3>
+    <div class="field">
+      <label>名称</label>
+      <input id="eName">
+    </div>
+    <div class="field">
+      <label>分组</label>
+      <input id="eGroup" placeholder="留空为未分组">
+    </div>
+    <div class="field">
+      <label>监听端口</label>
+      <input id="ePort" inputmode="numeric">
+      <div class="hint">改端口后入口地址会变，手机节点配置里也要跟着换成新入口地址。</div>
+    </div>
+    <div class="field">
+      <label>目标地址</label>
+      <input id="eTarget" placeholder="落地节点 SOCKS5 地址:端口">
+    </div>
+    <div class="field">
+      <label>出口模式</label>
+      <select id="eExit">
+        <option value="direct">直接转发（不使用隧道）</option>
+        <option value="tunnel">走隧道（需落地机运行 tunnel-agent.py）</option>
+      </select>
+    </div>
+    <div class="field" id="eTunnelField" style="display:none">
+      <label>隧道端地址</label>
+      <input id="eTunnel" placeholder="落地机隧道端地址:端口">
+    </div>
+    <div class="field">
+      <label>高级选项（0 = 不限）</label>
+      <input id="eSpeed" placeholder="限速（Mbps）" inputmode="numeric" style="margin-bottom:8px">
+      <input id="eIpLimit" placeholder="IP 限制（个）" inputmode="numeric" style="margin-bottom:8px">
+      <input id="eConnLimit" placeholder="连接数限制（个）" inputmode="numeric">
+    </div>
+    <div class="err" id="editErr"></div>
+    <div class="foot">
+      <button id="editCancel">取消</button>
+      <button class="primary" id="editOk">保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- ================= 添加成功：入口地址 ================= -->
 <div class="mask" id="doneMask">
   <div class="modal">
@@ -367,6 +413,7 @@ function renderRows(){
       <td class="${r.enabled ? 'ok' : 'paused'}">${r.enabled ? '正常' : '已暂停'}</td>
       <td><div class="rowbtns">
         <button data-act="copy" data-id="${r.id}">复制入口地址</button>
+        <button data-act="edit" data-id="${r.id}">编辑</button>
         <button data-act="toggle" data-id="${r.id}">${r.enabled ? '暂停' : '启用'}</button>
         <button data-act="del" data-id="${r.id}" class="danger">删除</button>
       </div></td>
@@ -409,6 +456,8 @@ async function rowAction(act, id){
     if (act === 'copy') {
       if (await copyText(rule.entry)) toast('入口地址已复制，去手机节点配置里替换原落地地址');
       else toast('复制失败，请手动复制：' + rule.entry);
+    } else if (act === 'edit') {
+      openEdit(rule);
     } else if (act === 'toggle') {
       await api('PATCH', '/api/rules/' + id, {enabled: !rule.enabled});
       await loadRules();
@@ -471,6 +520,74 @@ async function submitAdd(){
   } catch(e) { $('addErr').textContent = e.message; }
 }
 
+/* ---------------- 编辑规则 ---------------- */
+let editingId = null;
+function openEdit(rule){
+  editingId = rule.id;
+  $('editErr').textContent = '';
+  $('eName').value = rule.name;
+  $('eGroup').value = rule.group === '未分组' ? '' : rule.group;
+  $('ePort').value = rule.listen_port;
+  $('eTarget').value = rule.target;
+  $('eExit').value = rule.exit_mode || 'direct';
+  $('eTunnel').value = rule.tunnel || '';
+  $('eTunnelField').style.display = $('eExit').value === 'tunnel' ? 'block' : 'none';
+  $('eSpeed').value = rule.speed_limit_mbps || 0;
+  $('eIpLimit').value = rule.ip_limit || 0;
+  $('eConnLimit').value = rule.conn_limit || 0;
+  $('editMask').classList.add('show');
+}
+function closeEdit(){ $('editMask').classList.remove('show'); editingId = null; }
+async function submitEdit(){
+  if (!editingId) return;
+  $('editErr').textContent = '';
+  const oldRule = rules.find(r => r.id === editingId);
+  const oldEntry = oldRule ? oldRule.entry : '';
+  const name = $('eName').value.trim();
+  const group = $('eGroup').value.trim();
+  const portRaw = $('ePort').value.trim();
+  const target = $('eTarget').value.trim();
+  const exit_mode = $('eExit').value;
+  const tunnel = $('eTunnel').value.trim();
+  if (!name) { $('editErr').textContent = '请填写规则名称'; return; }
+  if (!target) { $('editErr').textContent = '请填写目标地址'; return; }
+  if (exit_mode === 'tunnel' && !tunnel) { $('editErr').textContent = '走隧道时请填写隧道端地址'; return; }
+  let listen_port = null;
+  if (portRaw) {
+    listen_port = parseInt(portRaw, 10);
+    if (!Number.isInteger(listen_port) || listen_port < 1 || listen_port > 65535) {
+      $('editErr').textContent = '监听端口须为 1-65535 的数字'; return;
+    }
+  }
+  const limitOf = (id, label) => {
+    const raw = $(id).value.trim();
+    if (!raw) return 0;
+    const v = parseInt(raw, 10);
+    if (!Number.isInteger(v) || v < 0) throw new Error(label + '须为 0 或正整数，0=不限');
+    return v;
+  };
+  let speed_limit_mbps, ip_limit, conn_limit;
+  try {
+    speed_limit_mbps = limitOf('eSpeed', '限速');
+    ip_limit = limitOf('eIpLimit', 'IP 限制');
+    conn_limit = limitOf('eConnLimit', '连接数限制');
+  } catch(e) { $('editErr').textContent = e.message; return; }
+  try {
+    const data = await api('PATCH', '/api/rules/' + editingId,
+      {name, group, listen_port, target, exit_mode, tunnel, speed_limit_mbps, ip_limit, conn_limit});
+    closeEdit();
+    await loadRules();
+    const newRule = rules.find(r => r.id === editingId);
+    if (newRule && newRule.entry !== oldEntry) {
+      $('doneEntry').textContent = newRule.entry;
+      $('doneMask').classList.add('show');
+      toast('已保存，入口地址变了，请去手机节点配置里换成新入口地址');
+    } else {
+      toast('已保存');
+    }
+  } catch(e) { $('editErr').textContent = e.message; }
+}
+
 /* ---------------- 统计弹窗 ---------------- */
 function openStats(){
   const total = rules.reduce((s, r) => s + r.bytes_in + r.bytes_out, 0);
@@ -513,6 +630,11 @@ $('navLogout').onclick = async () => {
 $('fExit').onchange = () => {
   $('fTunnelField').style.display = $('fExit').value === 'tunnel' ? 'block' : 'none';
 };
+$('eExit').onchange = () => {
+  $('eTunnelField').style.display = $('eExit').value === 'tunnel' ? 'block' : 'none';
+};
+$('editCancel').onclick = closeEdit;
+$('editOk').onclick = submitEdit;
 $('addBtn').onclick = openAdd;
 $('addCancel').onclick = closeAdd;
 $('addOk').onclick = submitAdd;

@@ -359,6 +359,108 @@ class Panel:
             await self.stop_forwarder(rule_id)
         return rule
 
+    async def update_rule(self, rule_id, fields):
+        """Edit an existing rule without deleting/recreating it.
+
+        Editable: name, group, target, exit_mode, tunnel,
+        speed_limit_mbps, ip_limit, conn_limit, listen_port, enabled.
+        Changing listen_port/target/exit/tunnel/limits restarts the
+        forwarder when the rule is enabled (live connections on the old
+        port are dropped, as with pause). A port change changes the
+        entry address, so the frontend must show the new entry to the
+        user after a successful edit. All validation happens BEFORE
+        the forwarder is stopped, so a bad edit leaves the old rule
+        running untouched.
+        """
+        rule = self.rules.get(rule_id)
+        if rule is None:
+            raise KeyError("rule not found")
+        # -- validate everything first, into locals, no mutation yet --
+        new_name = rule["name"]
+        if "name" in fields and fields["name"] is not None:
+            new_name = (fields["name"] or "").strip()
+            if not new_name:
+                raise ValueError("rule name is required")
+            if len(new_name) > 64:
+                raise ValueError("rule name is too long (max 64 characters)")
+        new_group = rule["group"]
+        if "group" in fields and fields["group"] is not None:
+            new_group = (fields["group"] or "").strip() or "未分组"
+        new_target_host, new_target_port = rule["target_host"], rule["target_port"]
+        if "target" in fields and fields["target"] is not None:
+            new_target_host, new_target_port = parse_target(fields["target"])
+        new_exit_mode = rule.get("exit_mode", "direct")
+        if "exit_mode" in fields and fields["exit_mode"] is not None:
+            new_exit_mode = (fields["exit_mode"] or "direct").strip()
+            if new_exit_mode not in ("direct", "tunnel"):
+                raise ValueError("exit mode must be direct or tunnel")
+        new_tunnel_host, new_tunnel_port = rule.get("tunnel_host", ""), rule.get("tunnel_port", 0)
+        if "tunnel" in fields and fields["tunnel"] is not None:
+            tunnel_text = (fields["tunnel"] or "").strip()
+            if new_exit_mode == "tunnel":
+                if not tunnel_text:
+                    raise ValueError("tunnel mode requires a tunnel endpoint address:port")
+                new_tunnel_host, new_tunnel_port = parse_target(tunnel_text)
+            elif tunnel_text:
+                new_tunnel_host, new_tunnel_port = parse_target(tunnel_text)
+            else:
+                new_tunnel_host, new_tunnel_port = "", 0
+        new_speed = rule.get("speed_limit_mbps", 0)
+        if "speed_limit_mbps" in fields:
+            new_speed = parse_limit(fields["speed_limit_mbps"], "speed limit")
+        new_ip = rule.get("ip_limit", 0)
+        if "ip_limit" in fields:
+            new_ip = parse_limit(fields["ip_limit"], "IP limit")
+        new_conn = rule.get("conn_limit", 0)
+        if "conn_limit" in fields:
+            new_conn = parse_limit(fields["conn_limit"], "connection limit")
+        new_port = rule["listen_port"]
+        if "listen_port" in fields and fields["listen_port"] not in (None, ""):
+            new_port = int(fields["listen_port"])
+            if not 1 <= new_port <= 65535:
+                raise ValueError("listen port must be between 1 and 65535")
+            if new_port == self.port:
+                raise ValueError("listen port must differ from the panel port")
+            if new_port != rule["listen_port"] and new_port in self.used_ports():
+                raise ValueError(f"listen port {new_port} is already used")
+        new_enabled = rule["enabled"]
+        if "enabled" in fields and fields["enabled"] is not None:
+            new_enabled = bool(fields["enabled"])
+        # -- apply, then restart only if something forwarding-relevant changed --
+        forwarding_changed = (
+            new_port != rule["listen_port"]
+            or new_target_host != rule["target_host"]
+            or new_target_port != rule["target_port"]
+            or new_exit_mode != rule.get("exit_mode", "direct")
+            or new_tunnel_host != rule.get("tunnel_host", "")
+            or new_tunnel_port != rule.get("tunnel_port", 0)
+            or new_speed != rule.get("speed_limit_mbps", 0)
+            or new_ip != rule.get("ip_limit", 0)
+            or new_conn != rule.get("conn_limit", 0)
+        )
+        was_enabled = rule["enabled"]
+        if was_enabled and forwarding_changed:
+            await self.stop_forwarder(rule_id)
+        rule["name"] = new_name
+        rule["group"] = new_group
+        rule["target_host"] = new_target_host
+        rule["target_port"] = new_target_port
+        rule["exit_mode"] = new_exit_mode
+        rule["tunnel_host"] = new_tunnel_host
+        rule["tunnel_port"] = new_tunnel_port
+        rule["speed_limit_mbps"] = new_speed
+        rule["ip_limit"] = new_ip
+        rule["conn_limit"] = new_conn
+        rule["listen_port"] = new_port
+        rule["enabled"] = new_enabled
+        self.save_rules()
+        if new_enabled and (forwarding_changed or not was_enabled):
+            await self.start_forwarder(rule)
+        elif not new_enabled and was_enabled and not forwarding_changed:
+            await self.stop_forwarder(rule_id)
+        print(f"[panel] rule updated: {new_name} on port {new_port}", flush=True)
+        return rule
+
     async def delete_rule(self, rule_id):
         # A stuck forwarder must never keep a rule undeletable: stop
         # with a timeout, then always pop + save the rule itself.
@@ -992,6 +1094,13 @@ class HttpServer:
         await writer.drain()
 
     async def _toggle_rule(self, writer, rule_id, body):
+        """PATCH /api/rules/<id>: toggle enabled, or edit the rule.
+
+        A body with only {enabled} keeps the old toggle behaviour.
+        A body with any edit field (name, group, target, exit_mode,
+        tunnel, limits, listen_port) goes through update_rule, which
+        validates first and restarts the forwarder only when needed.
+        """
         try:
             data = json.loads(body or b"{}")
         except Exception:
@@ -999,13 +1108,23 @@ class HttpServer:
             await writer.drain()
             return
         try:
-            rule = await self.panel.set_enabled(rule_id, data.get("enabled"))
+            edit_keys = {"name", "group", "target", "exit_mode", "tunnel",
+                         "speed_limit_mbps", "ip_limit", "conn_limit",
+                         "listen_port"}
+            if edit_keys & set(data.keys()):
+                rule = await self.panel.update_rule(rule_id, data)
+            else:
+                rule = await self.panel.set_enabled(rule_id, data.get("enabled"))
         except KeyError:
             writer.write(json_response(404, {"error": "rule not found"}))
             await writer.drain()
             return
+        except ValueError as exc:
+            writer.write(json_response(400, {"error": str(exc)}))
+            await writer.drain()
+            return
         except Exception as exc:
-            writer.write(json_response(400, {"error": f"cannot toggle: {exc}"}))
+            writer.write(json_response(400, {"error": f"cannot update: {exc}"}))
             await writer.drain()
             return
         writer.write(json_response(200, {"rule": self.panel.public_rule(rule)}))
