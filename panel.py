@@ -775,32 +775,51 @@ class RuleForwarder:
         _client_ip = peer[0] if peer and peer[0] else "unknown"
 
         def _on_up_first(data):
-            if len(data) >= 10 and data[0] == 5 and data[1] == 3:
-                _assoc["is_associate"] = True
+            # Scan anywhere, not just offset 0: greeting and ASSOCIATE
+            # can arrive coalesced in one TCP read.
+            for _i in range(max(0, len(data) - 2)):
+                if data[_i] == 5 and data[_i + 1] == 3:
+                    _assoc["is_associate"] = True
+                    break
 
         def _on_down_first(data):
             if not _assoc["is_associate"]:
                 return None
-            if len(data) < 10 or data[0] != 5 or data[1] != 0:
-                return None
-            try:
-                atyp = data[3]
-                if atyp == 1 and len(data) >= 10:
-                    import socket as _s
-                    relay_host = _s.inet_ntoa(data[4:8])
-                    relay_port = int.from_bytes(data[8:10], "big")
-                elif atyp == 3 and len(data) >= 5:
-                    dlen = data[4]
-                    if len(data) < 5 + dlen + 2:
-                        return None
-                    relay_host = data[5:5 + dlen].decode("utf-8", "ignore")
-                    relay_port = int.from_bytes(data[5 + dlen:7 + dlen], "big")
-                elif atyp == 4 and len(data) >= 22:
-                    import socket as _s
-                    relay_host = _s.inet_ntop(_s.AF_INET6, data[4:20])
-                    relay_port = int.from_bytes(data[20:22], "big")
-                else:
-                    return None
+            # Scan for an ASSOCIATE reply anywhere in this read:
+            # greeting reply (2 bytes) and ASSOCIATE reply (10+ bytes)
+            # can arrive coalesced. Pattern: 05 00 00 ATYP ...
+            for _off in range(max(0, len(data) - 9)):
+                if not (data[_off] == 5 and data[_off + 1] == 0
+                        and data[_off + 2] == 0):
+                    continue
+                try:
+                    atyp = data[_off + 3]
+                    if atyp == 1 and len(data) >= _off + 10:
+                        import socket as _s
+                        relay_host = _s.inet_ntoa(data[_off + 4:_off + 8])
+                        relay_port = int.from_bytes(
+                            data[_off + 8:_off + 10], "big")
+                        _reply_len = 10
+                    elif atyp == 3 and len(data) >= _off + 5:
+                        dlen = data[_off + 4]
+                        if len(data) < _off + 5 + dlen + 2:
+                            continue
+                        relay_host = data[_off + 5:_off + 5 + dlen].decode(
+                            "utf-8", "ignore")
+                        relay_port = int.from_bytes(
+                            data[_off + 5 + dlen:_off + 7 + dlen], "big")
+                        _reply_len = 7 + dlen
+                    elif atyp == 4 and len(data) >= _off + 22:
+                        import socket as _s
+                        relay_host = _s.inet_ntop(
+                            _s.AF_INET6, data[_off + 4:_off + 20])
+                        relay_port = int.from_bytes(
+                            data[_off + 20:_off + 22], "big")
+                        _reply_len = 22
+                    else:
+                        continue
+                except Exception:
+                    continue
                 if relay_host == "0.0.0.0" or relay_host == "::":
                     relay_host = self.rule["target_host"]
                 self.udp_relay_by_ip[_client_ip] = (
@@ -821,12 +840,14 @@ class RuleForwarder:
                     _panel_ip = self.panel.relay_ip
                     _panel_ip_b = _s.inet_aton(_panel_ip)
                     _entry_port = self.rule["listen_port"]
-                    return (b"\x05\x00\x00\x01" + _panel_ip_b +
-                            _entry_port.to_bytes(2, "big"))
+                    _rewritten = (b"\x05\x00\x00\x01" + _panel_ip_b +
+                                  _entry_port.to_bytes(2, "big"))
+                    # Preserve any bytes before/after the reply
+                    # (coalesced greeting reply, etc.).
+                    return data[:_off] + _rewritten + data[_off + _reply_len:]
                 except Exception:
                     return None
-            except Exception:
-                return None
+            return None
 
         pump_up = asyncio.ensure_future(
             self._pump(client_reader, target_writer, "bytes_in",
