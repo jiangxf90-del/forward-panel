@@ -118,6 +118,18 @@ ufw allow from 你的IP to any port 2080
 ssh -L 2080:localhost:2080 root@你的VPS_IP
 ```
 
+## 重置管理员密码（登录说密码不对时）
+
+不用旧密码也能重置，规则不会被删。VPS 终端（root）再跑一次一键安装：
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/jiangxf90-del/forward-panel/main/install.sh)"
+```
+
+看到 `管理员密码已存在，是否重置？[y/N]` 就输 `y`，然后按提示设两次新密码（屏幕不回显，两次要一样）。
+
+设完再开 `http://你的VPS_IP:2080`，用新密码登录。登录时注意：密码区分大小写，输入法切到英文，先确认开的面板就是这台机器的地址和端口，别开成了别的面板。
+
 ## 卸载
 
 第 1 步（VPS 终端）：进入安装包目录：
