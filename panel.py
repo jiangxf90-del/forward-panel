@@ -267,6 +267,9 @@ class Panel:
 
     def public_rule(self, rule):
         """Rule dict as sent to the frontend (entry address included)."""
+        exit_mode = rule.get("exit_mode", "direct")
+        if exit_mode not in ("direct", "tunnel"):
+            exit_mode = "direct"
         return {
             "id": rule["id"],
             "name": rule["name"],
@@ -274,6 +277,9 @@ class Panel:
             "listen_port": rule["listen_port"],
             "entry": self.entry_of(rule),
             "target": f"{rule['target_host']}:{rule['target_port']}",
+            "exit_mode": exit_mode,
+            "tunnel": f"{rule.get('tunnel_host')}:{rule.get('tunnel_port')}"
+                      if rule.get("tunnel_host") else "",
             "enabled": rule["enabled"],
             "bytes_in": rule["bytes_in"],
             "bytes_out": rule["bytes_out"],
@@ -286,7 +292,8 @@ class Panel:
         }
 
     async def add_rule(self, name, group, listen_port, target_text,
-                       speed_limit_mbps=0, ip_limit=0, conn_limit=0):
+                       speed_limit_mbps=0, ip_limit=0, conn_limit=0,
+                       exit_mode="direct", tunnel_text=""):
         """Validate, store, and (if enabled) start forwarding for a new rule."""
         name = (name or "").strip()
         if not name:
@@ -295,6 +302,14 @@ class Panel:
             raise ValueError("rule name is too long (max 64 characters)")
         group = (group or "").strip() or "未分组"
         host, target_port = parse_target(target_text)
+        exit_mode = (exit_mode or "direct").strip()
+        if exit_mode not in ("direct", "tunnel"):
+            raise ValueError("exit mode must be direct or tunnel")
+        tunnel_host, tunnel_port = "", 0
+        if exit_mode == "tunnel":
+            if not tunnel_text:
+                raise ValueError("tunnel mode requires a tunnel endpoint address:port")
+            tunnel_host, tunnel_port = parse_target(tunnel_text)
         speed_limit_mbps = parse_limit(speed_limit_mbps, "speed limit")
         ip_limit = parse_limit(ip_limit, "IP limit")
         conn_limit = parse_limit(conn_limit, "connection limit")
@@ -315,6 +330,9 @@ class Panel:
             "listen_port": listen_port,
             "target_host": host,
             "target_port": target_port,
+            "exit_mode": exit_mode,
+            "tunnel_host": tunnel_host,
+            "tunnel_port": tunnel_port,
             "speed_limit_mbps": speed_limit_mbps,
             "ip_limit": ip_limit,
             "conn_limit": conn_limit,
@@ -482,6 +500,21 @@ class RuleForwarder:
         self.seen_ips = set()
         self.rate_limiter = _RateLimiter(rule.get("speed_limit_mbps", 0))
 
+    def effective_target(self):
+        """Where this rule actually connects first.
+
+        direct: straight to the SOCKS5 landing (target_host:target_port).
+        tunnel: to the tunnel agent on the landing machine
+        (tunnel_host:tunnel_port); that agent then connects locally to
+        the final target. The final target is still stored in
+        target_host:target_port, but the relay does not dial it directly
+        in tunnel mode. Vendor landings cannot run the tunnel agent, so
+        they must stay on direct.
+        """
+        if self.rule.get("exit_mode") == "tunnel" and self.rule.get("tunnel_host"):
+            return self.rule["tunnel_host"], self.rule["tunnel_port"]
+        return self.rule["target_host"], self.rule["target_port"]
+
     def ip_allowed(self, ip):
         """IP limit: max distinct source IPs, 0 = unlimited.
 
@@ -601,9 +634,9 @@ class RuleForwarder:
                 pass
             return
         try:
+            _t_host, _t_port = self.effective_target()
             target_reader, target_writer = await asyncio.wait_for(
-                asyncio.open_connection(
-                    self.rule["target_host"], self.rule["target_port"]),
+                asyncio.open_connection(_t_host, _t_port),
                 timeout=10)
         except Exception:
             # Target unreachable: drop the client connection cleanly.
@@ -685,10 +718,10 @@ class _UDPSession:
         if self.closed or self.transport is not None:
             return
         loop = asyncio.get_running_loop()
-        rule = self.forwarder.rule
+        _t_host, _t_port = self.forwarder.effective_target()
         transport, _ = await loop.create_datagram_endpoint(
             lambda: _UDPUpstreamProtocol(self),
-            remote_addr=(rule["target_host"], rule["target_port"]))
+            remote_addr=(_t_host, _t_port))
         if self.closed:
             transport.close()
             return
@@ -941,7 +974,9 @@ class HttpServer:
                 listen_port, data.get("target"),
                 data.get("speed_limit_mbps"),
                 data.get("ip_limit"),
-                data.get("conn_limit"))
+                data.get("conn_limit"),
+                data.get("exit_mode", "direct"),
+                data.get("tunnel", ""))
         except ValueError as exc:
             writer.write(json_response(400, {"error": str(exc)}))
             await writer.drain()

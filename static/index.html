@@ -182,6 +182,19 @@
       <div class="hint">一行一个目标？本面板 v1 每条规则只填一个目标：落地节点的 SOCKS5 地址和端口。</div>
     </div>
     <div class="field">
+      <label>出口模式</label>
+      <select id="fExit">
+        <option value="direct">直接转发（不使用隧道）</option>
+        <option value="tunnel">走隧道（需落地机运行 tunnel-agent.py）</option>
+      </select>
+      <div class="hint">直转：中转机直接连目标地址。隧道：中转机先连落地机上的隧道端，隧道端再本地连目标；vendor 落地装不了隧道端，只能用直转。</div>
+    </div>
+    <div class="field" id="fTunnelField" style="display:none">
+      <label>隧道端地址</label>
+      <input id="fTunnel" placeholder="落地机隧道端地址:端口，例如 203.0.113.10:20000">
+      <div class="hint">落地机上跑：python3 tunnel-agent.py --listen 20000 --target 127.0.0.1:1080，目标地址栏此时填隧道端看到的本地目标，通常是 127.0.0.1:端口。</div>
+    </div>
+    <div class="field">
       <label>高级选项（默认全部不限）</label>
       <div class="hint" style="margin:0 0 8px">0 = 不限。直播规则建议：IP 限制填 1，只认第一个连上的设备，配置被复制到别的手机上 IP 不同就连不上。</div>
       <input id="fSpeed" placeholder="限速（Mbps，0=不限，上行下行合计）" inputmode="numeric" style="margin-bottom:8px">
@@ -349,7 +362,7 @@ function renderRows(){
       <td>${esc(r.name)}</td>
       <td>${esc(r.group)}</td>
       <td class="mono">${esc(r.entry)}</td>
-      <td class="mono">${esc(r.target)}</td>
+      <td class="mono">${r.exit_mode === 'tunnel' ? '隧道 ' + esc(r.tunnel || '') + ' → ' + esc(r.target) : esc(r.target)}</td>
       <td class="mono" data-traffic="${r.id}">${fmt(r.bytes_in + r.bytes_out)}</td>
       <td class="${r.enabled ? 'ok' : 'paused'}">${r.enabled ? '正常' : '已暂停'}</td>
       <td><div class="rowbtns">
@@ -420,8 +433,11 @@ async function submitAdd(){
   const group = $('fGroup').value.trim();
   const portRaw = $('fPort').value.trim();
   const target = $('fTarget').value.trim();
+  const exit_mode = $('fExit').value;
+  const tunnel = $('fTunnel').value.trim();
   if (!name) { $('addErr').textContent = '请填写规则名称'; return; }
   if (!target) { $('addErr').textContent = '请填写目标地址（落地节点 SOCKS5 地址:端口）'; return; }
+  if (exit_mode === 'tunnel' && !tunnel) { $('addErr').textContent = '走隧道时请填写隧道端地址'; return; }
   let listen_port = null;
   if (portRaw) {
     listen_port = parseInt(portRaw, 10);
@@ -444,10 +460,10 @@ async function submitAdd(){
   } catch(e) { $('addErr').textContent = e.message; return; }
   try {
     const data = await api('POST', '/api/rules',
-      {name, group, listen_port, target, speed_limit_mbps, ip_limit, conn_limit});
+      {name, group, listen_port, target, speed_limit_mbps, ip_limit, conn_limit, exit_mode, tunnel});
     closeAdd();
     $('fName').value = ''; $('fGroup').value = '';
-    $('fPort').value = ''; $('fTarget').value = '';
+    $('fPort').value = ''; $('fTarget').value = ''; $('fTunnel').value = '';
     $('fSpeed').value = ''; $('fIpLimit').value = ''; $('fConnLimit').value = '';
     $('doneEntry').textContent = data.entry;
     $('doneMask').classList.add('show');
@@ -493,6 +509,9 @@ $('statsClose').onclick = () => $('statsMask').classList.remove('show');
 $('navLogout').onclick = async () => {
   try { await api('POST', '/api/logout'); } catch(e) {}
   showLogin();
+};
+$('fExit').onchange = () => {
+  $('fTunnelField').style.display = $('fExit').value === 'tunnel' ? 'block' : 'none';
 };
 $('addBtn').onclick = openAdd;
 $('addCancel').onclick = closeAdd;
