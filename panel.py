@@ -386,6 +386,49 @@ class Panel:
 # Forwarders: one per rule, TCP + UDP, userspace (no root-only features).
 # ---------------------------------------------------------------------------
 
+def tune_socket(sock):
+    """Best-effort per-socket tuning. Never fails a connection.
+
+    The old code set nothing: Nagle + small buffers + cubic on a lossy
+    leg is a large part of why relaying felt slower than a 3x-ui/xray
+    node. Each option is tried separately and ignored on failure, so a
+    kernel without BBR (or a platform without an option) still works.
+    System-wide BBR/buffers are set by install.sh (sysctl); this only
+    tightens the sockets this panel itself opens.
+    """
+    if sock is None:
+        return
+    try:
+        import socket as _socket
+        try:
+            sock.setsockopt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, 1)
+        except Exception:
+            pass
+        try:
+            sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_KEEPALIVE, 1)
+        except Exception:
+            pass
+        for opt, val in ((_socket.SO_RCVBUF, 1024 * 1024),
+                         (_socket.SO_SNDBUF, 1024 * 1024)):
+            try:
+                sock.setsockopt(_socket.SOL_SOCKET, opt, val)
+            except Exception:
+                pass
+        # Per-socket BBR when the kernel offers it (Linux TCP_CONGESTION=41).
+        try:
+            sock.setsockopt(_socket.IPPROTO_TCP, 13, b"bbr")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def writer_socket(writer):
+    try:
+        return writer.get_extra_info("socket")
+    except Exception:
+        return None
+
 class _RateLimiter:
     """Per-rule token bucket. 0 Mbps means unlimited (no waiting at all).
 
@@ -462,10 +505,17 @@ class RuleForwarder:
         # TCP and UDP may share one port (different protocols).
         self.tcp_server = await asyncio.start_server(
             self._handle_tcp, "0.0.0.0", port)
+        for srv_sock in (self.tcp_server.sockets or []):
+            tune_socket(srv_sock)
         try:
             self.udp_transport, _ = await loop.create_datagram_endpoint(
                 lambda: _UDPListenProtocol(self),
                 local_addr=("0.0.0.0", port))
+            try:
+                udp_sock = self.udp_transport.get_extra_info("socket")
+                tune_socket(udp_sock)
+            except Exception:
+                pass
         except Exception as exc:
             # Some hosts block UDP entirely (sandboxes, containers). The
             # rule still works for TCP; warn instead of failing the rule.
@@ -535,6 +585,7 @@ class RuleForwarder:
                 self.tcp_handlers.discard(handler)
 
     async def _handle_tcp_inner(self, client_reader, client_writer):
+        tune_socket(writer_socket(client_writer))
         peer = client_writer.get_extra_info("peername") or (None,)
         if not self.ip_allowed(peer[0] if peer[0] else "unknown"):
             try:
@@ -561,6 +612,7 @@ class RuleForwarder:
             except Exception:
                 pass
             return
+        tune_socket(writer_socket(target_writer))
         pair = (client_writer, target_writer)
         self.tcp_conns.add(pair)
         pump_up = asyncio.ensure_future(
@@ -590,7 +642,9 @@ class RuleForwarder:
         """Copy bytes one way, counting them. Ends on EOF or error."""
         try:
             while True:
-                data = await reader.read(65536)
+                # 256 KiB chunks (was 64 KiB): fewer syscalls/drains,
+                # materially higher sustained throughput for video.
+                data = await reader.read(262144)
                 if not data:
                     break
                 await self.rate_limiter.consume(len(data))

@@ -93,6 +93,26 @@ if [ -z "${SKIP_SET:-}" ]; then
   unset PASS1 PASS2
 fi
 
+# 内核调优（2026-10-30 完善版）：面板慢的一大半在内核没调，不在面板代码。
+# 只写 /etc/sysctl.d/99-forward-panel.conf，BBR 只有内核支持时才开，
+# 不支持就保持 cubic，绝不让调优失败导致安装失败；删掉该文件并重载即回退。
+{
+  echo "# forward-panel kernel tuning (safe to delete to revert)"
+  echo "net.core.rmem_max = 16777216"
+  echo "net.core.wmem_max = 16777216"
+  echo "net.core.rmem_default = 262144"
+  echo "net.core.wmem_default = 262144"
+  echo "net.ipv4.tcp_rmem = 4096 262144 16777216"
+  echo "net.ipv4.tcp_wmem = 4096 262144 16777216"
+  echo "net.ipv4.tcp_fastopen = 3"
+  echo "net.ipv4.tcp_keepalive_time = 60"
+  if grep -q bbr /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
+    echo "net.ipv4.tcp_congestion_control = bbr"
+  fi
+} > /etc/sysctl.d/99-forward-panel.conf 2>/dev/null || true
+sysctl -p /etc/sysctl.d/99-forward-panel.conf 2>/dev/null || true
+echo "内核调优已应用（当前拥塞算法：$(cat /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || echo 未知)）"
+
 cat > /etc/systemd/system/forward-panel.service <<EOF
 [Unit]
 Description=Forwarding rules panel
