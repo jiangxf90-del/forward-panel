@@ -12,6 +12,23 @@
 
 ## 部署步骤
 
+### 一键安装（推荐，中转机就绪后直接用）
+
+VPS 终端（root）执行一条命令，脚本会自动从本仓库拉取 panel.py 和前端文件，
+装到 `/opt/forward-panel`，然后按提示设管理员密码：
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/jiangxf90-del/forward-panel/main/install.sh)"
+```
+
+装完浏览器开 `http://你的VPS_IP:2080` 登录。换端口：
+
+```bash
+PANEL_PORT=3080 bash -c "$(curl -fsSL https://raw.githubusercontent.com/jiangxf90-del/forward-panel/main/install.sh)"
+```
+
+下面是本地上传的老办法，不用一键安装时才用。
+
 ### 第 1 步（Mac 本地）：把安装包传到 VPS
 
 用 FinalShell 的 SFTP，把整个 `forward-panel` 文件夹拖到 VPS 的 `/root/` 目录下。
@@ -101,6 +118,12 @@ cd /root/forward-panel
 
 ```bash
 bash uninstall.sh
+```
+
+一键安装的用户没有 `/root/forward-panel` 目录，改用安装时复制过去的那份：
+
+```bash
+bash /opt/forward-panel/uninstall.sh
 ```
 
 ## 文件说明
