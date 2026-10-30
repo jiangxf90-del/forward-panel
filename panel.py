@@ -119,6 +119,28 @@ _HOST_RE = re.compile(
 )
 
 
+def parse_limit(value, field):
+    """Parse an advanced-option limit: blank/None -> 0 (unlimited).
+
+    0 means unlimited for all three limits. Negative or non-integer
+    values are rejected.
+    """
+    if value in (None, ""):
+        return 0
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a number")
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return 0
+        if not value.isdigit():
+            raise ValueError(f"{field} must be a non-negative number")
+        value = int(value)
+    if not isinstance(value, int) or value < 0:
+        raise ValueError(f"{field} must be a non-negative number")
+    return value
+
+
 def parse_target(text):
     """Parse 'host:port' into (host, port). Raises ValueError on bad input.
 
@@ -256,9 +278,15 @@ class Panel:
             "bytes_in": rule["bytes_in"],
             "bytes_out": rule["bytes_out"],
             "created_at": rule["created_at"],
+            # Advanced options, 0 = unlimited. Old rules (pre-v2) lack
+            # these keys, so default them here instead of migrating files.
+            "speed_limit_mbps": rule.get("speed_limit_mbps", 0),
+            "ip_limit": rule.get("ip_limit", 0),
+            "conn_limit": rule.get("conn_limit", 0),
         }
 
-    async def add_rule(self, name, group, listen_port, target_text):
+    async def add_rule(self, name, group, listen_port, target_text,
+                       speed_limit_mbps=0, ip_limit=0, conn_limit=0):
         """Validate, store, and (if enabled) start forwarding for a new rule."""
         name = (name or "").strip()
         if not name:
@@ -267,6 +295,9 @@ class Panel:
             raise ValueError("rule name is too long (max 64 characters)")
         group = (group or "").strip() or "未分组"
         host, target_port = parse_target(target_text)
+        speed_limit_mbps = parse_limit(speed_limit_mbps, "speed limit")
+        ip_limit = parse_limit(ip_limit, "IP limit")
+        conn_limit = parse_limit(conn_limit, "connection limit")
         if listen_port in (None, ""):
             listen_port = self.pick_random_port()
         else:
@@ -284,6 +315,9 @@ class Panel:
             "listen_port": listen_port,
             "target_host": host,
             "target_port": target_port,
+            "speed_limit_mbps": speed_limit_mbps,
+            "ip_limit": ip_limit,
+            "conn_limit": conn_limit,
             "enabled": True,
             "bytes_in": 0,
             "bytes_out": 0,
@@ -345,6 +379,40 @@ class Panel:
 # Forwarders: one per rule, TCP + UDP, userspace (no root-only features).
 # ---------------------------------------------------------------------------
 
+class _RateLimiter:
+    """Per-rule token bucket. 0 Mbps means unlimited (no waiting at all).
+
+    Up and down pumps share one bucket, so the cap is the rule's total
+    (up + down). Tokens refill at the configured rate, with at most one
+    second's worth banked, so a burst cannot exceed roughly one second
+    of traffic over the cap.
+    """
+
+    def __init__(self, mbps):
+        self.rate = mbps * 1_000_000 // 8 if mbps else 0  # bytes/second
+        self.tokens = float(self.rate)
+        self.last = time.monotonic()
+        self.lock = asyncio.Lock()
+
+    async def consume(self, n):
+        if self.rate <= 0:
+            return
+        async with self.lock:
+            while True:
+                now = time.monotonic()
+                self.tokens = min(
+                    float(self.rate),
+                    self.tokens + (now - self.last) * self.rate)
+                self.last = now
+                if self.tokens >= n:
+                    self.tokens -= n
+                    return
+                wait = (n - self.tokens) / self.rate
+                self.tokens = 0.0
+                self.last = time.monotonic()
+                await asyncio.sleep(wait)
+
+
 class RuleForwarder:
     """Listens on a rule's port and forwards raw bytes to its target."""
 
@@ -357,6 +425,26 @@ class RuleForwarder:
         self.tcp_conns = set()     # (client_writer, target_writer) pairs
         self.udp_sessions = {}     # client addr -> _UDPSession
         self.running = False
+        # Advanced limits, all 0 = unlimited. seen_ips is in-memory only:
+        # it resets when the rule is paused/resumed or the panel restarts,
+        # so re-enabling a rule re-locks it to the next device that connects.
+        self.seen_ips = set()
+        self.rate_limiter = _RateLimiter(rule.get("speed_limit_mbps", 0))
+
+    def ip_allowed(self, ip):
+        """IP limit: max distinct source IPs, 0 = unlimited.
+
+        The first ip_limit distinct IPs are remembered; any further IP
+        is rejected. With ip_limit=1, a rule copied to another phone
+        (different source IP) cannot connect at all.
+        """
+        limit = self.rule.get("ip_limit", 0)
+        if not limit or ip in self.seen_ips:
+            return True
+        if len(self.seen_ips) >= limit:
+            return False
+        self.seen_ips.add(ip)
+        return True
 
     async def start(self):
         if self.running:
@@ -408,6 +496,20 @@ class RuleForwarder:
     # -- TCP ---------------------------------------------------------------
     async def _handle_tcp(self, client_reader, client_writer):
         """One phone/client connection: open the target, pump both ways."""
+        peer = client_writer.get_extra_info("peername") or (None,)
+        if not self.ip_allowed(peer[0] if peer[0] else "unknown"):
+            try:
+                client_writer.close()
+            except Exception:
+                pass
+            return
+        conn_limit = self.rule.get("conn_limit", 0)
+        if conn_limit and len(self.tcp_conns) >= conn_limit:
+            try:
+                client_writer.close()
+            except Exception:
+                pass
+            return
         try:
             target_reader, target_writer = await asyncio.wait_for(
                 asyncio.open_connection(
@@ -452,6 +554,7 @@ class RuleForwarder:
                 data = await reader.read(65536)
                 if not data:
                     break
+                await self.rate_limiter.consume(len(data))
                 writer.write(data)
                 await writer.drain()
                 self.rule[counter_key] += len(data)
@@ -522,6 +625,8 @@ class _UDPListenProtocol(asyncio.DatagramProtocol):
 
     def datagram_received(self, data, addr):
         rule = self.forwarder.rule
+        if not self.forwarder.ip_allowed(addr[0]):
+            return
         rule["bytes_in"] += len(data)
         self.forwarder.panel.mark_dirty()
         session = self.forwarder.udp_sessions.get(addr)
@@ -740,7 +845,10 @@ class HttpServer:
                 listen_port = None
             rule = await self.panel.add_rule(
                 data.get("name"), data.get("group"),
-                listen_port, data.get("target"))
+                listen_port, data.get("target"),
+                data.get("speed_limit_mbps"),
+                data.get("ip_limit"),
+                data.get("conn_limit"))
         except ValueError as exc:
             writer.write(json_response(400, {"error": str(exc)}))
             await writer.drain()
