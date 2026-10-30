@@ -342,7 +342,14 @@ class Panel:
         return rule
 
     async def delete_rule(self, rule_id):
-        await self.stop_forwarder(rule_id)
+        # A stuck forwarder must never keep a rule undeletable: stop
+        # with a timeout, then always pop + save the rule itself.
+        try:
+            await asyncio.wait_for(self.stop_forwarder(rule_id), timeout=5)
+        except Exception as exc:
+            print(f"[panel] WARNING: stopping rule {rule_id} failed "
+                  f"({exc}); deleting the rule anyway", flush=True)
+            self.forwarders.pop(rule_id, None)
         rule = self.rules.pop(rule_id, None)
         if rule is not None:
             self.save_rules()
@@ -422,6 +429,7 @@ class RuleForwarder:
         self.tcp_server = None
         self.udp_transport = None
         self.tcp_tasks = set()     # pump tasks for live TCP connections
+        self.tcp_handlers = set()  # _handle_tcp tasks for live connections
         self.tcp_conns = set()     # (client_writer, target_writer) pairs
         self.udp_sessions = {}     # client addr -> _UDPSession
         self.running = False
@@ -470,11 +478,17 @@ class RuleForwarder:
 
     async def stop(self):
         self.running = False
-        if self.tcp_server is not None:
-            self.tcp_server.close()
-            await self.tcp_server.wait_closed()
-            self.tcp_server = None
+        # BUG FIX (2026-10-30): the old order was server.close() +
+        # await wait_closed() FIRST, then close the live connections.
+        # On Python 3.12 wait_closed() waits until ALL live connections
+        # are dropped, so stop() deadlocked while a phone was still
+        # connected to the rule -- deleting (or pausing) that rule hung
+        # forever and the rule stayed in the list. Fix: drop the live
+        # connections FIRST, then close the server, and never wait on
+        # wait_closed() without a timeout.
         for task in list(self.tcp_tasks):
+            task.cancel()
+        for task in list(self.tcp_handlers):
             task.cancel()
         for client_writer, target_writer in list(self.tcp_conns):
             for writer in (client_writer, target_writer):
@@ -484,18 +498,43 @@ class RuleForwarder:
                     pass
         self.tcp_conns.clear()
         self.tcp_tasks.clear()
+        self.tcp_handlers.clear()
         for session in list(self.udp_sessions.values()):
             session.close()
         self.udp_sessions.clear()
         if self.udp_transport is not None:
-            self.udp_transport.close()
+            try:
+                self.udp_transport.close()
+            except Exception:
+                pass
             self.udp_transport = None
+        if self.tcp_server is not None:
+            server = self.tcp_server
+            self.tcp_server = None
+            server.close()
+            try:
+                await asyncio.wait_for(server.wait_closed(), timeout=3)
+            except (asyncio.TimeoutError, Exception):
+                # A stuck handler must not block rule deletion/pause.
+                print(f"[panel] WARNING: wait_closed on port "
+                      f"{self.rule['listen_port']} timed out; "
+                      f"continuing anyway", flush=True)
         print(f"[panel] forwarding stopped on port {self.rule['listen_port']}",
               flush=True)
 
     # -- TCP ---------------------------------------------------------------
     async def _handle_tcp(self, client_reader, client_writer):
         """One phone/client connection: open the target, pump both ways."""
+        handler = asyncio.current_task()
+        if handler is not None:
+            self.tcp_handlers.add(handler)
+        try:
+            return await self._handle_tcp_inner(client_reader, client_writer)
+        finally:
+            if handler is not None:
+                self.tcp_handlers.discard(handler)
+
+    async def _handle_tcp_inner(self, client_reader, client_writer):
         peer = client_writer.get_extra_info("peername") or (None,)
         if not self.ip_allowed(peer[0] if peer[0] else "unknown"):
             try:

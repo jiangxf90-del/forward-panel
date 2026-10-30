@@ -403,7 +403,9 @@ async function rowAction(act, id){
     } else if (act === 'del') {
       if (!confirm('删除规则「' + rule.name + '」？转发会立即停止。')) return;
       await api('DELETE', '/api/rules/' + id);
-      await loadRules(); toast('已删除');
+      await loadRules();
+      if (rules.find(r => r.id === id)) toast('删除未生效：该规则还在，请先在手机上断开该节点再删一次');
+      else toast('已删除');
     }
   } catch(e) { toast('操作失败：' + e.message); }
 }
