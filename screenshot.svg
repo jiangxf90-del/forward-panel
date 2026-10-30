@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" font-family="-apple-system, PingFang SC, Microsoft YaHei, Segoe UI, sans-serif">
+  <rect width="1280" height="640" fill="#101216"/>
+  <!-- sidebar -->
+  <rect x="0" y="0" width="190" height="640" fill="#14171d"/>
+  <line x1="190" y1="0" x2="190" y2="640" stroke="#262b36"/>
+  <text x="20" y="38" fill="#e6e8ec" font-size="16" font-weight="600">转发规则面板</text>
+  <text x="20" y="58" fill="#9aa3b2" font-size="11">装在本台中转机上</text>
+  <rect x="12" y="78" width="166" height="34" rx="8" fill="#1d212a"/>
+  <text x="24" y="100" fill="#9aa3b2" font-size="14">主页</text>
+  <rect x="12" y="118" width="166" height="34" rx="8" fill="#1e293b"/>
+  <text x="24" y="140" fill="#ffffff" font-size="14">转发规则</text>
+  <rect x="12" y="158" width="166" height="34" rx="8" fill="#1d212a"/>
+  <text x="24" y="180" fill="#9aa3b2" font-size="14">统计数据</text>
+  <!-- main -->
+  <text x="216" y="44" fill="#e6e8ec" font-size="20" font-weight="600">我的转发规则</text>
+  <rect x="1020" y="22" width="70" height="32" rx="8" fill="#1d212a" stroke="#262b36"/>
+  <text x="1040" y="43" fill="#e6e8ec" font-size="14">刷新</text>
+  <rect x="1100" y="22" width="90" height="32" rx="8" fill="#1d212a" stroke="#262b36"/>
+  <text x="1120" y="43" fill="#e6e8ec" font-size="14">统计数据</text>
+  <!-- stats -->
+  <g font-size="13">
+    <rect x="216" y="70" width="240" height="62" rx="10" fill="#171a20" stroke="#262b36"/>
+    <text x="232" y="96" fill="#e6e8ec" font-size="15" font-weight="600">2.62 GiB</text>
+    <text x="232" y="116" fill="#9aa3b2" font-size="12">已用流量（全部规则）</text>
+    <rect x="470" y="70" width="180" height="62" rx="10" fill="#171a20" stroke="#262b36"/>
+    <text x="486" y="96" fill="#e6e8ec" font-size="15" font-weight="600">3 / 999</text>
+    <text x="486" y="116" fill="#9aa3b2" font-size="12">规则数</text>
+    <rect x="664" y="70" width="200" height="62" rx="10" fill="#171a20" stroke="#262b36"/>
+    <text x="680" y="96" fill="#e6e8ec" font-size="15" font-weight="600">2 条转发中</text>
+    <text x="680" y="116" fill="#9aa3b2" font-size="12">启用中的规则</text>
+  </g>
+  <!-- tabs -->
+  <rect x="216" y="150" width="62" height="30" rx="15" fill="#3b82f6"/>
+  <text x="232" y="170" fill="#ffffff" font-size="14">全部</text>
+  <rect x="288" y="150" width="92" height="30" rx="15" fill="#171a20" stroke="#262b36"/>
+  <text x="304" y="170" fill="#9aa3b2" font-size="14">直播分组</text>
+  <rect x="390" y="150" width="76" height="30" rx="15" fill="#171a20" stroke="#262b36"/>
+  <text x="406" y="170" fill="#9aa3b2" font-size="14">中转组</text>
+  <!-- add button -->
+  <rect x="216" y="196" width="92" height="34" rx="8" fill="#3b82f6"/>
+  <text x="232" y="218" fill="#ffffff" font-size="14">添加规则</text>
+  <rect x="318" y="196" width="92" height="34" rx="8" fill="#1d212a" stroke="#262b36"/>
+  <text x="334" y="218" fill="#e6e8ec" font-size="14">删除选中</text>
+  <!-- table -->
+  <rect x="216" y="246" width="1040" height="300" rx="12" fill="#171a20" stroke="#262b36"/>
+  <g font-size="13" fill="#9aa3b2">
+    <text x="232" y="274">规则名</text><text x="360" y="274">分组</text><text x="470" y="274">入口</text><text x="660" y="274">出口</text><text x="850" y="274">已用流量</text><text x="970" y="274">状态</text><text x="1050" y="274">操作</text>
+  </g>
+  <line x1="216" y1="288" x2="1256" y2="288" stroke="#262b36"/>
+  <g font-size="14" fill="#e6e8ec">
+    <text x="232" y="330">直播手机01</text><text x="360" y="330" fill="#9aa3b2">直播分组</text>
+    <text x="470" y="330" font-family="monospace" font-size="13">203.0.113.1:24567</text>
+    <text x="660" y="330" font-family="monospace" font-size="13">203.0.113.10:1080</text>
+    <text x="850" y="330" font-family="monospace" font-size="13">1.31 GiB</text>
+    <text x="970" y="330" fill="#22c55e">正常</text>
+    <rect x="1050" y="308" width="110" height="28" rx="8" fill="#1d212a" stroke="#262b36"/><text x="1060" y="327" font-size="13">复制入口地址</text>
+    <line x1="216" y1="352" x2="1256" y2="352" stroke="#262b36"/>
+    <text x="232" y="394">直播手机02</text><text x="360" y="394" fill="#9aa3b2">直播分组</text>
+    <text x="470" y="394" font-family="monospace" font-size="13">203.0.113.1:24568</text>
+    <text x="660" y="394" font-family="monospace" font-size="13">203.0.113.11:1080</text>
+    <text x="850" y="394" font-family="monospace" font-size="13">1.02 GiB</text>
+    <text x="970" y="394" fill="#22c55e">正常</text>
+    <rect x="1050" y="372" width="110" height="28" rx="8" fill="#1d212a" stroke="#262b36"/><text x="1060" y="391" font-size="13">复制入口地址</text>
+    <line x1="216" y1="416" x2="1256" y2="416" stroke="#262b36"/>
+    <text x="232" y="458">中转手机01</text><text x="360" y="458" fill="#9aa3b2">中转组</text>
+    <text x="470" y="458" font-family="monospace" font-size="13">203.0.113.1:24569</text>
+    <text x="660" y="458" font-family="monospace" font-size="13">203.0.113.12:1080</text>
+    <text x="850" y="458" font-family="monospace" font-size="13">0.29 GiB</text>
+    <text x="970" y="458" fill="#f59e0b">已暂停</text>
+    <rect x="1050" y="436" width="110" height="28" rx="8" fill="#1d212a" stroke="#262b36"/><text x="1060" y="455" font-size="13">复制入口地址</text>
+  </g>
+  <text x="216" y="580" fill="#9aa3b2" font-size="12">示例数据：入口为中转机地址:监听端口，出口为落地节点 SOCKS5 地址:端口；实际入口以安装后面板为准。</text>
+</svg>
