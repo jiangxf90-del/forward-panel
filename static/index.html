@@ -134,6 +134,7 @@
 
     <div class="stats">
       <div class="stat"><b id="statTraffic">0 B</b><span>已用流量（全部规则）</span></div>
+      <div class="stat"><b id="statRate">—</b><span>实时总速率（全部规则，5 秒平均）</span></div>
       <div class="stat"><b id="statRules">0 / 999</b><span>规则数</span></div>
       <div class="stat"><b id="statRunning">0 条转发中</b><span>启用中的规则</span></div>
     </div>
@@ -149,7 +150,7 @@
       <thead><tr>
         <th><input type="checkbox" id="checkAll"></th>
         <th>规则名</th><th>分组</th><th>入口</th><th>出口</th>
-        <th>已用流量</th><th>状态</th><th>操作</th>
+        <th>已用流量</th><th>实时速率</th><th>状态</th><th>操作</th>
       </tr></thead>
       <tbody id="ruleRows"></tbody>
     </table>
@@ -320,6 +321,33 @@ function fmt(n){
   return (i === 0 ? n : n.toFixed(2)) + ' ' + u[i];
 }
 
+/* 速率格式化：字节/秒 -> Mbps / Kbps，0 显示 0 */
+function fmtRate(bytesPerSec){
+  const bps = bytesPerSec * 8;
+  if (bps >= 1000000) return (bps / 1000000).toFixed(1) + ' Mbps';
+  if (bps >= 1000) return Math.round(bps / 1000) + ' Kbps';
+  return '0';
+}
+
+/* 实时速率：两次刷新之间流量差 / 时间差，5 秒刷新一次即 5 秒平均。
+   第一次刷新没有上一次数据，速率显示为 —，下一次刷新后才有数字。
+   流量计数重置（面板重启清零等）时速率按 0 算，不显示负数。 */
+let prevTraffic = {};
+function computeRates(list){
+  const now = Date.now() / 1000;
+  list.forEach(r => {
+    const prev = prevTraffic[r.id];
+    if (prev && now > prev.t) {
+      const dt = now - prev.t;
+      r.rate_in = Math.max(0, (r.bytes_in - prev.in) / dt);
+      r.rate_out = Math.max(0, (r.bytes_out - prev.out) / dt);
+    } else {
+      r.rate_in = null; r.rate_out = null;
+    }
+    prevTraffic[r.id] = {in: r.bytes_in, out: r.bytes_out, t: now};
+  });
+}
+
 /* 复制：优先系统剪贴板，失败时用临时输入框兜底 */
 async function copyText(text){
   try { await navigator.clipboard.writeText(text); return true; }
@@ -390,6 +418,9 @@ function renderStats(){
   const total = rules.reduce((s, r) => s + r.bytes_in + r.bytes_out, 0);
   const running = rules.filter(r => r.enabled).length;
   $('statTraffic').textContent = fmt(total);
+  const hasRate = rules.some(r => r.rate_in != null);
+  const totalRate = rules.reduce((s, r) => s + (r.rate_in || 0) + (r.rate_out || 0), 0);
+  $('statRate').textContent = hasRate ? fmtRate(totalRate) : '—';
   $('statRules').textContent = rules.length + ' / 999';
   $('statRunning').textContent = running + ' 条转发中';
 }
@@ -411,6 +442,7 @@ function renderRows(){
       <td class="mono">${esc(r.entry)}</td>
       <td class="mono">${r.exit_mode === 'tunnel' ? '隧道 ' + esc(r.tunnel || '') + ' → ' + esc(r.target) : esc(r.target)}</td>
       <td class="mono" data-traffic="${r.id}">${fmt(r.bytes_in + r.bytes_out)}</td>
+      <td class="mono" data-rate="${r.id}">${r.rate_in != null ? '↑ ' + fmtRate(r.rate_in) + ' ↓ ' + fmtRate(r.rate_out) : '—'}</td>
       <td class="${r.enabled ? 'ok' : 'paused'}">${r.enabled ? '正常' : '已暂停'}</td>
       <td><div class="rowbtns">
         <button data-act="copy" data-id="${r.id}">复制入口地址</button>
@@ -434,18 +466,23 @@ function esc(s){
 async function loadRules(){
   const data = await api('GET', '/api/rules');
   rules = data.rules || [];
+  computeRates(rules);
   renderAll();
 }
 
-/* 只刷新流量格和统计，不重绘整表（避免打断勾选） */
+/* 只刷新流量格、速率格和统计，不重绘整表（避免打断勾选） */
 async function refreshTraffic(){
   try {
     const data = await api('GET', '/api/rules');
     rules = data.rules || [];
+    computeRates(rules);
     renderStats();
     rules.forEach(r => {
       const cell = document.querySelector(`[data-traffic="${r.id}"]`);
       if (cell) cell.textContent = fmt(r.bytes_in + r.bytes_out);
+      const rateCell = document.querySelector(`[data-rate="${r.id}"]`);
+      if (rateCell) rateCell.textContent = r.rate_in != null
+        ? '↑ ' + fmtRate(r.rate_in) + ' ↓ ' + fmtRate(r.rate_out) : '—';
     });
   } catch(e) { /* 掉线时静默，等下次刷新 */ }
 }
@@ -622,7 +659,7 @@ function openStats(){
           <div style="height:8px;width:${pct}%;background:var(--accent);border-radius:4px"></div>
         </div>
         <div style="color:var(--muted);font-size:12px;margin-top:2px">
-          上行 ${fmt(r.bytes_in)} · 下行 ${fmt(r.bytes_out)} · ${r.enabled ? '转发中' : '已暂停'}
+          上行 ${fmt(r.bytes_in)} · 下行 ${fmt(r.bytes_out)} · ${r.enabled ? '转发中' : '已暂停'}${r.rate_in != null ? ' · 实时 ↑ ' + fmtRate(r.rate_in) + ' ↓ ' + fmtRate(r.rate_out) : ''}
         </div>
         <div style="color:var(--muted);font-size:12px;margin-top:2px">
           限制：${(r.speed_limit_mbps ? '限速 ' + r.speed_limit_mbps + ' Mbps · ' : '') + (r.ip_limit ? 'IP 最多 ' + r.ip_limit + ' 个 · ' : '') + (r.conn_limit ? '连接最多 ' + r.conn_limit + ' 个' : '') || '无'}
