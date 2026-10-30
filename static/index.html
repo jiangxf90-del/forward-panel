@@ -61,17 +61,24 @@
   .rowbtns{display:flex;gap:6px;flex-wrap:wrap}
   .rowbtns button{padding:5px 10px;font-size:13px}
   .empty{padding:40px;text-align:center;color:var(--muted)}
-  /* modal */
+  /* modal: tall forms (add/edit) used to run past the bottom of the
+     screen with the save/cancel buttons off-screen and unreachable,
+     because neither the mask nor the modal could scroll. Now the mask
+     scrolls, the modal is capped at 92vh and scrolls internally, and
+     the footer sticks to the bottom of the modal so save/cancel are
+     always visible. */
   .mask{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;
-    align-items:flex-start;justify-content:center;padding-top:9vh;z-index:10}
+    align-items:flex-start;justify-content:center;padding:4vh 12px;z-index:10;
+    overflow-y:auto}
   .mask.show{display:flex}
   .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;
-    width:min(520px,92vw);padding:22px}
+    width:min(520px,92vw);padding:22px;max-height:92vh;overflow-y:auto}
   .modal h3{margin:0 0 16px;font-size:17px}
   .field{margin-bottom:14px}
   .field label{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}
   .hint{color:var(--muted);font-size:12px;margin-top:5px}
-  .modal .foot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+  .modal .foot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px;
+    position:sticky;bottom:0;background:var(--panel);padding:12px 0 2px}
   .bigentry{font-family:ui-monospace,Menlo,monospace;font-size:26px;font-weight:700;
     text-align:center;padding:18px 8px;background:#0d0f13;border:1px solid var(--line);
     border-radius:10px;word-break:break-all}
